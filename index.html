@@ -49,6 +49,19 @@ input:focus,textarea:focus{border-color:var(--accent)}
 .items-row{display:flex;gap:8px;align-items:center;margin-bottom:8px}
 .items-row .n{width:26px;text-align:right;color:var(--muted);font-size:13px}
 .items-row input{flex:1}
+.items-row textarea{flex:1}
+.script-sec{margin-bottom:18px}
+.script-sec h4{margin:0 0 10px;font-size:16px}
+.star{padding:8px 11px;background:transparent;border:1px solid var(--line);color:var(--muted)}
+.star.on{color:#fbbf24;border-color:#fbbf24;background:rgba(251,191,36,.12)}
+#drawer{position:fixed;top:0;right:0;height:100vh;width:min(440px,100vw);background:var(--panel);border-left:1px solid var(--line);
+  padding:18px;overflow:auto;transform:translateX(105%);transition:.25s;z-index:20;box-shadow:-10px 0 40px rgba(0,0,0,.4)}
+#drawer.open{transform:none}
+.drawer-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px}
+.scriptres{margin:0 0 18px}
+.scriptres .res{font-size:17px;padding:10px 16px}
+.scriptres h4{margin:0 0 8px;color:var(--muted);font-size:13px;text-transform:uppercase;letter-spacing:.08em}
+.res .tag{font-size:20px;width:54px;text-align:center}
 .items-row button{padding:8px 11px}
 .addbox{display:flex;gap:8px;align-items:flex-start;margin-bottom:14px}
 .tier-edit{display:flex;gap:8px;align-items:center;margin-bottom:8px}
@@ -110,6 +123,7 @@ input:focus,textarea:focus{border-color:var(--accent)}
 </head>
 <body>
 <div id="app"></div>
+<aside id="drawer"></aside>
 <div id="toast"></div>
 <script>
 'use strict';
@@ -128,10 +142,11 @@ const shuffle = a => { a = a.slice(); for (let i = a.length - 1; i > 0; i--) { c
 
 let games = [];
 try { games = JSON.parse(localStorage.getItem(KEY)) || []; } catch (e) { games = []; }
+games.forEach(g => { g.hooks = g.hooks || []; g.closings = g.closings || []; });
 const save = () => { try { localStorage.setItem(KEY, JSON.stringify(games)); } catch (e) { toast('Could not save (storage full or blocked)'); } };
 const touch = g => { g.updatedAt = Date.now(); save(); };
 
-let curId = null, editingId = null, view = 'home', sel = null, dragId = null;
+let scriptOpen = false, curId = null, editingId = null, view = 'home', sel = null, dragId = null;
 const cur = () => games.find(g => g.id === curId);
 const nameOf = g => g.name.trim() || 'Untitled game';
 const status = g => g.result ? 'done' : g.session ? 'prog' : 'draft';
@@ -156,11 +171,50 @@ function route() {
   }
   const [, page, id] = location.hash.split('/');
   const g = games.find(x => x.id === id);
-  curId = g ? g.id : null; sel = null;
+  curId = g ? g.id : null; sel = null; scriptOpen = false; syncDrawer();
   if (page === 'edit' && g) return renderEditor(g);
   if (page === 'play' && g) { if (!g.session) startSession(g); return renderPlay(g); }
   if (page === 'results' && g && g.result) return renderResults(g);
   renderHome();
+}
+
+/* ---------- video script (hooks & closing lines) ---------- */
+const KIND_LABEL = { hooks: 'Hook', closings: 'Closing line' };
+function scriptHTML(g) {
+  const sec = (kind, title, ph) => `<div class="script-sec"><h4>${title}</h4>
+    ${g[kind].map(x => `<div class="items-row">
+      <button class="star ${x.pick ? 'on' : ''}" data-act="starScript" data-kind="${kind}" data-id="${x.id}" title="Mark as the one you'll use">★</button>
+      <textarea rows="2" data-in="script" data-kind="${kind}" data-id="${x.id}">${esc(x.text)}</textarea>
+      <button class="ghost danger" data-act="delScript" data-kind="${kind}" data-id="${x.id}">✕</button></div>`).join('') || '<div class="hint" style="margin-bottom:8px">None yet.</div>'}
+    <div class="addbox"><textarea class="addScript" data-kind="${kind}" rows="2" placeholder="${ph}"></textarea>
+      <button class="primary" data-act="addScript" data-kind="${kind}">Add</button></div></div>`;
+  return sec('hooks', '🎣 Hook options', 'Type a hook option, press Enter to add…') +
+         sec('closings', '🎬 Closing line options', 'Type a closing line, press Enter to add…');
+}
+function refreshScript() {
+  const g = cur(); if (!g) return;
+  document.querySelectorAll('.scriptBox').forEach(el => { el.innerHTML = scriptHTML(g); });
+}
+function syncDrawer() {
+  const d = document.getElementById('drawer'), g = cur();
+  d.classList.toggle('open', scriptOpen);
+  d.innerHTML = scriptOpen && g ? `<div class="drawer-head"><h3>✍️ Video script</h3>
+    <button class="ghost" data-act="toggleScript">Close</button></div><div class="scriptBox">${scriptHTML(g)}</div>` : '';
+}
+function addScript(kind) {
+  const g = cur(), ta = [...document.querySelectorAll(`.addScript[data-kind="${kind}"]`)].find(t => t.offsetParent);
+  if (!ta) return;
+  const lines = ta.value.split('\n').map(x => x.trim()).filter(Boolean);
+  if (!lines.length) return;
+  lines.forEach(text => g[kind].push({ id: uid(), text, pick: false }));
+  touch(g); refreshScript();
+  [...document.querySelectorAll(`.addScript[data-kind="${kind}"]`)].find(t => t.offsetParent)?.focus();
+  if (view === 'results') renderResults(g);
+}
+function scriptResultHTML(g, kind, title) {
+  const list = g[kind]; if (!list.length) return '';
+  return `<div class="scriptres"><h4>${title}</h4>${list.map(x => `<div class="res ${x.pick ? 'r1' : ''}">
+    <div class="tag">${x.pick ? '⭐' : '•'}</div>${esc(x.text)}</div>`).join('')}</div>`;
 }
 
 /* ---------- home ---------- */
@@ -214,8 +268,10 @@ function renderEditor(g) {
       <div class="addbox"><textarea id="newItems" rows="2" placeholder="Type an item and press Enter. Paste a list to add one item per line."></textarea>
         <button class="primary" data-act="addItems">Add</button></div>
       <div id="itemsList"></div></div>
-    <div id="settings"></div>`;
-  renderSettings(g); renderItemsList(g);
+    <div id="settings"></div>
+    <div class="panel"><h3>4 · Video script <span class="muted">(optional — you can also add these during the game)</span></h3>
+      <div class="scriptBox"></div></div>`;
+  renderSettings(g); renderItemsList(g); refreshScript();
 }
 
 function renderSettings(g) {
@@ -282,6 +338,7 @@ function renderPlay(g) {
   const head = (sub) => `<div class="topbar">
     <button class="ghost" data-act="home">← Save &amp; exit</button>
     <div class="grow"><h2>${esc(nameOf(g))}</h2><div class="hint">${sub}</div></div>
+    <button data-act="toggleScript">✍️ Script</button>
     <button class="ghost" data-act="restart">Restart</button></div>`;
   if (g.mode === 'versus') return renderVersus(g, head);
   const s = g.session;
@@ -413,8 +470,11 @@ function renderResults(g) {
   }
   $app.innerHTML = `<div class="topbar"><button class="ghost" data-act="home">← All games</button>
     <div class="grow center"><span class="badge">${MODES[g.mode].icon} ${MODES[g.mode].label}</span>
-    <h1 style="margin-top:6px">🏆 ${esc(nameOf(g))}</h1></div><div style="width:110px"></div></div>
+    <h1 style="margin-top:6px">🏆 ${esc(nameOf(g))}</h1></div><button data-act="toggleScript">✍️ Script</button></div>
+    ${scriptResultHTML(g, 'hooks', '🎣 Hook options')}
     ${body}
+    <div style="height:18px"></div>
+    ${scriptResultHTML(g, 'closings', '🎬 Closing line options')}
     <div class="actions" style="justify-content:center">
       <button class="primary" data-act="copy">Copy as text</button>
       ${g.mode !== 'versus' ? '<button data-act="adjust">Adjust</button>' : ''}
@@ -424,9 +484,13 @@ function renderResults(g) {
 
 function resultText(g) {
   const r = g.result, lines = [nameOf(g), ''];
+  const scr = (kind, label) => { const p = g[kind].filter(x => x.pick), l = p.length ? p : g[kind];
+    if (!l.length) return; lines.push(p.length ? `${label}:` : `${label} options:`); l.forEach(x => lines.push(`- ${x.text}`)); lines.push(''); };
+  scr('hooks', 'Hook');
   if (r.type === 'rank') { r.ranked.forEach((t, i) => lines.push(`${i + 1}. ${t}`)); }
   else { r.tiers.forEach(t => lines.push(`${t.name}: ${t.items.join(', ') || '—'}`)); if (r.unranked.length) lines.push(`Unplaced: ${r.unranked.join(', ')}`); }
-  return lines.join('\n');
+  lines.push(''); scr('closings', 'Closing line');
+  return lines.join('\n').trim();
 }
 
 /* ---------- events ---------- */
@@ -445,7 +509,7 @@ document.addEventListener('click', e => {
   }
   const id = a.dataset.id;
   switch (a.dataset.act) {
-    case 'new': { const n = { id: uid(), name: '', mode: 'rank', items: [], topN: null, tiers: mkTiers(), session: null, result: null, createdAt: Date.now(), updatedAt: Date.now() };
+    case 'new': { const n = { id: uid(), name: '', mode: 'rank', items: [], topN: null, tiers: mkTiers(), hooks: [], closings: [], session: null, result: null, createdAt: Date.now(), updatedAt: Date.now() };
       games.push(n); save(); go('#/edit/' + n.id); break; }
     case 'home': go('#/'); break;
     case 'open-edit': go('#/edit/' + id); break;
@@ -478,6 +542,11 @@ document.addEventListener('click', e => {
       }
       finish(); break; }
     // results
+    case 'toggleScript': scriptOpen = !scriptOpen; syncDrawer(); break;
+    case 'addScript': addScript(a.dataset.kind); break;
+    case 'delScript': g[a.dataset.kind] = g[a.dataset.kind].filter(x => x.id !== id); touch(g); refreshScript(); if (view === 'results') renderResults(g); break;
+    case 'starScript': { const list = g[a.dataset.kind], it = list.find(x => x.id === id), was = it.pick;
+      list.forEach(x => x.pick = false); it.pick = !was; touch(g); refreshScript(); if (view === 'results') renderResults(g); break; }
     case 'copy': navigator.clipboard.writeText(resultText(g)).then(() => toast('Copied to clipboard'), () => toast('Copy failed')); break;
     case 'adjust': go('#/play/' + g.id); break;
   }
@@ -488,6 +557,7 @@ document.addEventListener('input', e => {
   if (!k || !g) return;
   const v = e.target.value, id = e.target.dataset.id;
   if (k === 'name') g.name = v;
+  else if (k === 'script') { const it = (g[e.target.dataset.kind] || []).find(x => x.id === id); if (it) it.text = v; }
   else if (k === 'topN') g.topN = Math.max(1, parseInt(v, 10)) || null;
   else if (k === 'item') { const it = g.items.find(i => i.id === id); if (it) it.text = v; }
   else if (k === 'tiername') g.tiers.find(t => t.id === id).name = v;
@@ -497,6 +567,7 @@ document.addEventListener('input', e => {
 
 document.addEventListener('keydown', e => {
   if (e.target.id === 'newItems' && e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); addItems(cur()); return; }
+  if (e.target.classList && e.target.classList.contains('addScript') && e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); addScript(e.target.dataset.kind); return; }
   const g = cur();
   if (view === 'play' && g && g.mode === 'versus' && !/INPUT|TEXTAREA/.test(e.target.tagName)) {
     const cards = document.querySelectorAll('.vs-card');
